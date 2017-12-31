@@ -112,7 +112,7 @@ func main() {
       log.Fatalf("abnormalReturns for event %s have %d elements; want EVENT_WINDOW_LENGTH = %d\n", eventDate, len(abnormalReturns), EVENT_WINDOW_LENGTH)
     }
     for i := 0; i < EVENT_WINDOW_LENGTH; i++ {
-      averageAbnormalReturns[i] += abnormalReturns[i] / float64(EVENT_WINDOW_LENGTH)
+      averageAbnormalReturns[i] += abnormalReturns[i] / float64(len(eventDates))
     }
 
     fmt.Printf("gamma0 = %f\ngamma1 = %f\ngamma2 = %f\nresiduals = %q\nconditionalVariances = %q\n", gamma0, gamma1, gamma2, residuals, conditionalVariances)
