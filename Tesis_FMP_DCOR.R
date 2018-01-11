@@ -218,13 +218,13 @@ analyzeEvents = function(returnsFile, eventsFile, termY, termX) {
   
   #####
   # Compute variance of cumulative abnormal return page28 MacKinlay 1997
-  leftinnersum = 0
-  innersum = 0
+  sum = 0
   for (i in 1:N) {
+    leftinnersum = 0
     for (k in 1:EVENT_WINDOW_LENGTH) {
       leftinnersum = leftinnersum + abnormalReturns[k,i]
     }
-    sum = (leftinnersum - cumulativeAbnormalReturn) ** 2
+    sum = sum + (leftinnersum - cumulativeAbnormalReturn) ** 2
   }
   varianceCAR = sum / (N ** 2)
   print("Variance of cumulative abnormal return:")
