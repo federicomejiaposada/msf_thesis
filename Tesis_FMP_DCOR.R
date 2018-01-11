@@ -6,10 +6,20 @@ library(rugarch)
 library(stats)
 library(readxl)
 
-ESTIMATION_WINDOW_LENGTH = 500
-EVENT_WINDOW_LENGTH = 3
-EVENT_WINDOW_OFFSET = 0
+#####
+#Clear Global Environment
+rm(list=ls())
 
+#####
+#Global variables
+
+ESTIMATION_WINDOW_LENGTH = 500
+EVENT_WINDOW_LENGTH = 5
+EVENT_WINDOW_OFFSET = 0 #number from -x to 0
+
+
+######
+#Function to compute and fit GARCH(1,1) model with mean model as the market model
 # data: list with the data to be fitted.
 # externalRegressor: list with external regressor data.
 computeGarch = function(data, externalRegressor) {
@@ -17,7 +27,6 @@ computeGarch = function(data, externalRegressor) {
                                       external.regressors=as.matrix(externalRegressor)))
   
   fit = ugarchfit(spec, data, solver="hybrid")
-  #show(fit)
   
   alpha = fit@fit[["coef"]][["mu"]]
   beta =  fit@fit[["coef"]][["mxreg1"]]
@@ -30,36 +39,50 @@ computeGarch = function(data, externalRegressor) {
   conditionalVariances = fit@fit[["sigma"]]
   lastConditionalVariance = tail(conditionalVariances, n=1)
   matcoef = fit@fit[["matcoef"]]
-
-  return(list(alpha=alpha, beta=beta,
+  
+  return(list(garchfit=fit, alpha=alpha, beta=beta,
               gamma0=gamma0, gamma1=gamma1, gamma2=gamma2,
               residuals=residuals, lastResidual=lastResidual, sigmaResiduals=sigmaResiduals,
               conditionalVariances=conditionalVariances, lastConditionalVariance=lastConditionalVariance,
               matcoef=matcoef))
 }
 
+#####
+#Function estimateEvent to run computeGARCH on it with the addequate estimation window and event window
+
 estimateEvent = function(returnsData, eventDate) {
   for (i in 1:nrow(returnsData)) {
     if (returnsData[[i, "DATE"]] == eventDate) {
       print(paste("Found event", eventDate, "on row i =", i))
       
+      #Definition of event window
       eventWindowFrom = i + EVENT_WINDOW_OFFSET
       eventWindowTo = eventWindowFrom + EVENT_WINDOW_LENGTH - 1
       
+      #Definition of estimation window
       estimationWindowTo = eventWindowFrom - 1
       estimationWindowFrom = estimationWindowTo - ESTIMATION_WINDOW_LENGTH + 1
       
+      #Data to use in computeGarch with the appropiate estimation window respect to the event i
       garchData = returnsData[estimationWindowFrom:estimationWindowTo,]
+      
       if (nrow(garchData) != ESTIMATION_WINDOW_LENGTH) {
         stop("unexpected size of estimation window data")
       }
         
       #print(garchData)
+      #Separate data to input in computeGarch function
       fitData = as.data.frame(garchData[,2])
       regressorData = as.data.frame(garchData[,3])
+      
+      #Garch results of computeGarch
       garchResult = computeGarch(fitData, regressorData)
+      
+      print("Coeficient matrix")
+      print(garchResult$matcoef)
       #print(garchResult)
       
+      #
       abnormalReturns = double()
       for (k in eventWindowFrom:eventWindowTo) {
         # returnsData[[k, 2]] <= term Y
@@ -78,6 +101,7 @@ estimateEvent = function(returnsData, eventDate) {
   stop(paste("failed to find event", eventDate))
 }
 
+#####
 # Returns a range to iterate over covering the interval [from, to] both inclusive.
 # If from > to, returns an empty range.
 safeRange = function(from, to) {
@@ -85,6 +109,8 @@ safeRange = function(from, to) {
   return(from:to)
 }
 
+#####
+#Function to compute the Expected Conditional Volatility
 computeExpectedConditionalVolatility = function(k, gamma0, gamma1, gamma2, lastConditionalVariance, lastResidual) {
   sum = 0.0
   for (j in safeRange(1, k-1)) {
@@ -97,6 +123,8 @@ computeExpectedConditionalVolatility = function(k, gamma0, gamma1, gamma2, lastC
   return(term1 + term2 + term3)
 }
 
+#####
+#Function to compute the Multiplicative Effect on Volatility
 computeMultiplicativeEffectOnVolatility = function(N, k, abnormalReturns, expectedConditionalVolatility) {
   outer_sum = 0.0
   for (i in safeRange(1,N)) { # big sum
@@ -118,7 +146,9 @@ computeMultiplicativeEffectOnVolatility = function(N, k, abnormalReturns, expect
   
 }
 
-# returnsFile: string with path to the file with return data.
+#####
+#Function to analize an event with CAR and CAV
+# returnsFile: string with path to the file with returns data.
 # eventFile: string with path to the file that contains the events.
 # termY: string with the left-side term (e.g. "COLCAP")
 # termX: string with the right-side term (e.g "IBOV")
@@ -128,15 +158,19 @@ analyzeEvents = function(returnsFile, eventsFile, termY, termX) {
   eventDates = read_excel(eventsFile)[[1]]
   
   N = length(eventDates) # Number of events
+  #Create matrix full of zeros to assign ARs (rows=day in event window, cols=event )
+  abnormalReturns = matrix(0, EVENT_WINDOW_LENGTH, N)
+  #Create vector of Average AR 
   averageAbnormalReturns = double(EVENT_WINDOW_LENGTH)
   expectedConditionalVolatility = matrix(0, EVENT_WINDOW_LENGTH, N)
-  abnormalReturns = matrix(0, EVENT_WINDOW_LENGTH, N)
-  
+  MultiplicativeEffectOnVolatility = matrix(0, EVENT_WINDOW_LENGTH)
   sigmasResiduals = double(N)
   
   for (i in 1:N) {
     date = eventDates[i]
     print(paste("Estimating event", date))
+    
+    ##Calls function estimateEvent which returns AR's and estimators of the GARCH fit process
     eventResult = estimateEvent(returnsData, date)
     
     sigmasResiduals[i] = eventResult$sigmaResiduals
@@ -144,7 +178,7 @@ analyzeEvents = function(returnsFile, eventsFile, termY, termX) {
     if (length(eventResult$abnormalReturns) != EVENT_WINDOW_LENGTH) {
       stop(paste("unexpected length of abnormal returns for event", date))
     }
-    # Compute contribution from this event to global average abnormal returns for each event window day.
+    # Compute contribution from this event to global average Abnormal r\Returns for each event window day.
     for (k in 1:EVENT_WINDOW_LENGTH) {
       abnormalReturns[k, i] = eventResult$abnormalReturns[k]
       averageAbnormalReturns[k] = averageAbnormalReturns[k] + eventResult$abnormalReturns[k] / as.double(length(eventDates))
@@ -161,60 +195,97 @@ analyzeEvents = function(returnsFile, eventsFile, termY, termX) {
                                                 lastResidual=eventResult$lastResidual)
     }
   }
-  
-
   #print("Expected conditional volatility (rows=day in event window, cols=event)")
   #print(expectedConditionalVolatility)
    
   #print("Sigmas residuals:")
   #print(sigmasResiduals)
 
-  #print("Abnormal returns (rows=day in event window, cols=event):")
-  #print(abnormalReturns)
+  print("Abnormal returns (rows=day in event window, cols=event):")
+  print(abnormalReturns)
   
   print("Average abnormal returns:")
   print(averageAbnormalReturns)
   
-  # Compute cumulative abnormal return.
+  #####
+  # Compute AVERAGE cumulative abnormal return.
   cumulativeAbnormalReturn = 0.0
-  for (i in 1:EVENT_WINDOW_LENGTH) {
-    cumulativeAbnormalReturn = cumulativeAbnormalReturn + averageAbnormalReturns[i]
+  for (k in 1:EVENT_WINDOW_LENGTH) {
+    cumulativeAbnormalReturn = cumulativeAbnormalReturn + averageAbnormalReturns[k] #look averageAbnormalReturns
   }
   print("Cumulative abnormal return:")
   print(cumulativeAbnormalReturn)
   
-  # Compute variance of cumulative abnormal return.
-  sum = 0
-  for (k in 1:EVENT_WINDOW_LENGTH) {
-    for (i in 1:N) {
-      sum = sum + expectedConditionalVolatility[k, i]
+  #####
+  # Compute variance of cumulative abnormal return page28 MacKinlay 1997
+  leftinnersum = 0
+  innersum = 0
+  for (i in 1:N) {
+    for (k in 1:EVENT_WINDOW_LENGTH) {
+      leftinnersum = leftinnersum + abnormalReturns[k,i]
     }
+    sum = (leftinnersum - cumulativeAbnormalReturn) ** 2
   }
   varianceCAR = sum / (N ** 2)
   print("Variance of cumulative abnormal return:")
   print(varianceCAR)
+  # # Compute variance of cumulative abnormal return the old-way
+  # sum = 0
+  # for (k in 1:EVENT_WINDOW_LENGTH) {
+  #   for (i in 1:N) {
+  #     sum = sum + expectedConditionalVolatility[k, i]
+  #   }
+  # }
+  # varianceCAR = sum / (N ** 2)
+  # print("Variance of cumulative abnormal return:")
+  # print(varianceCAR)
   
+  #Compute theta statistic for abnormal returns
   theta1 = cumulativeAbnormalReturn / (varianceCAR ** 0.5)
   print("Theta1:")
   print(theta1)
   
+  #Compute p-value assuming normal distribution for Cumulative Abnormal Return (CAR)
+  pvalCAR = pnorm(theta1)
+  print("Cumulative probability of theta1 with Normal Distribution")
+  print(pvalCAR)
+  
   sumM = 0
   for (k in 1:EVENT_WINDOW_LENGTH) {
-    sumM = sumM + computeMultiplicativeEffectOnVolatility(N, k, abnormalReturns, expectedConditionalVolatility)
+    
+    MultiplicativeEffectOnVolatility[k] =
+      computeMultiplicativeEffectOnVolatility(N, k, abnormalReturns, expectedConditionalVolatility)
+  
+    sumM = sumM + MultiplicativeEffectOnVolatility[k]
   }
+  
+  print("Multiplicative effect on volatility")
+  print(MultiplicativeEffectOnVolatility)
+  
+  print("Sum Mt")
+  print(sumM)
+  
   cumulativeAbnormalVolatility = sumM - EVENT_WINDOW_LENGTH
   print("cumulative abnormal volatility:")
   print(cumulativeAbnormalVolatility)
 
+  #Compute phi statistic for Cumulative Abnormal Volatility (CAV)
   phi = (N - 1) * sumM
   print("Phi:")
   print(phi)
+  
+  #Compute p-value assuming chi squared distribution for Cumulative Abnormal Volatility
+  pvalCAV = pchisq(phi,((N-1)*EVENT_WINDOW_LENGTH))
+  print("Cumulative probability of phi with Chi Sq with (N-1)*(Event window lenght) degrees of freedom")
+  print(pvalCAV)
 }
+
+#####
 
 directory = "C:/Users/Earendil/Google Drive/01_MSc_Finance/001_Thesis_proposal/Programs/Data_for_R/"
 returnsFile = paste(directory, "data_returns.xlsx", sep="")
-eventsFile = paste(directory, "money.xlsx", sep="")
+eventsFile = paste(directory, "prueba.xlsx", sep="")
 
 
-analyzeEvents(returnsFile, eventsFile, "COLCAP", "IBOV")
+analyzeEvents(returnsFile, eventsFile, "ISA", "COLCAP")
 
