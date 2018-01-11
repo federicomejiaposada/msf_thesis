@@ -163,7 +163,7 @@ analyzeEvents = function(returnsFile, eventsFile, termY, termX) {
   #Create vector of Average AR 
   averageAbnormalReturns = double(EVENT_WINDOW_LENGTH)
   expectedConditionalVolatility = matrix(0, EVENT_WINDOW_LENGTH, N)
-  MultiplicativeEffectOnVolatility = matrix(0, EVENT_WINDOW_LENGTH)
+  MultiplicativeEffectOnVolatility = double(EVENT_WINDOW_LENGTH)
   sigmasResiduals = double(N)
   
   for (i in 1:N) {
