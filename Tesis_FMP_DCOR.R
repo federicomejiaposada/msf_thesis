@@ -22,8 +22,12 @@ cat("\014") #Clean console
 
 #Following Mnasri & Nechi 2016, p189
 ESTIMATION_WINDOW_LENGTH = 500
-EVENT_WINDOW_LENGTH = 10 #number from 1 to 30
-EVENT_WINDOW_OFFSET = 0 #number from -9 to 20 # When 0, it means exactly before the event
+#[1, 20], [1, 5], [1, 3], [1, 2], [1, 1], [1, 10],
+#[11, 20], [-10,-1], [-1,-1]
+#event window lenght from 0 to 20 / offset number from -10 to 10
+# When 0, it means exactly before the event, thus [1,x] in the event window lenght
+EVENT_WINDOW_LENGTH = 5
+EVENT_WINDOW_OFFSET = 0
 
 ######
 #Function to compute and fit GARCH(1,1) model with mean model as the market model
@@ -46,12 +50,14 @@ computeGarch = function(data, externalRegressor) {
   conditionalVariances = fit@fit[["sigma"]]
   lastConditionalVariance = tail(conditionalVariances, n=1)
   matcoef = fit@fit[["matcoef"]]
+  infocriteria = infocriteria(fit)
+  loglikelihood = fit@fit[["LLH"]]
   
   return(list(garchfit=fit, alpha=alpha, beta=beta,
               gamma0=gamma0, gamma1=gamma1, gamma2=gamma2,
               residuals=residuals, lastResidual=lastResidual,
               conditionalVariances=conditionalVariances, lastConditionalVariance=lastConditionalVariance,
-              matcoef=matcoef))
+              matcoef=matcoef, infocriteria=infocriteria, loglikelihood=loglikelihood))
 }
 
 #####
@@ -86,9 +92,16 @@ estimateEvent = function(returnsData, eventDate) {
       #Following Mnasri & Nechi 2016, p189, equations (1) and (2)
       garchResult = computeGarch(fitData, regressorData)
       
+      #####
+      # assign(paste("garchResult", i, sep = ""), garchResult$garchfit, envir = .GlobalEnv)
+      # print("GARCH fit results")
+      # print(garchResult$garchfit)
       print("Coeficient matrix")
       print(garchResult$matcoef)
-      #print(garchResult)
+      print("Information criteria")
+      print(garchResult$infocriteria)
+      print("LogLikelihood")
+      print(garchResult$loglikelihood)
       
       #Create vector abnormalReturns to fill it
       abnormalReturns = double()
@@ -127,18 +140,18 @@ computeExpectedConditionalVolatility = function(k, gamma0, gamma1, gamma2, lastC
   if (k == 1){
     COMPUTEDExpectedConditionalVolatility = gamma0 + gamma1 * lastConditionalVariance + gamma2 * lastResidual ** 2
   }
-    else {
-      sum = 0.0
-      for (j in safeRange(1, k-1)) {
-        sum = sum + ((gamma1 + gamma2) ** j)
-      }
-      
-      term1 = gamma0 * sum
-      term2 = (gamma1 + gamma2) ** (k - 1) * gamma1 * lastConditionalVariance
-      term3 = (gamma1 + gamma2) ** (k - 1) * gamma2 * lastResidual ** 2
-
-      COMPUTEDExpectedConditionalVolatility = term1 + term2 + term3
+  else {
+    sum = 0.0
+    for (j in safeRange(1, k-1)) {
+      sum = sum + ((gamma1 + gamma2) ** j)
     }
+    
+    term1 = gamma0 * sum
+    term2 = (gamma1 + gamma2) ** (k - 1) * gamma1 * lastConditionalVariance
+    term3 = (gamma1 + gamma2) ** (k - 1) * gamma2 * lastResidual ** 2
+    
+    COMPUTEDExpectedConditionalVolatility = term1 + term2 + term3
+  }
   return(COMPUTEDExpectedConditionalVolatility)
 }
 
@@ -178,12 +191,14 @@ analyzeEvents = function(returnsFile, eventsFile, termY, termX) {
   eventDates = read_excel(eventsFile)[[1]]
   
   N = length(eventDates) # Number of events
+  print(paste("Number of events:", N))
   #Create matrix full of zeros to assign ARs (rows=day in event window, cols=event )
   abnormalReturns = matrix(0, EVENT_WINDOW_LENGTH, N)
   #Create vector of Average AR 
   averageAbnormalReturns = double(EVENT_WINDOW_LENGTH)
   expectedConditionalVolatility = matrix(0, EVENT_WINDOW_LENGTH, N)
   MultiplicativeEffectOnVolatility = double(EVENT_WINDOW_LENGTH)
+  
   
   for (i in 1:N) {
     date = eventDates[i]
@@ -213,16 +228,17 @@ analyzeEvents = function(returnsFile, eventsFile, termY, termX) {
         lastResidual=eventResult$lastResidual)
     }
   }
-  print("Expected conditional volatility (rows=day in event window, cols=event)")
-  print(expectedConditionalVolatility)
+  #####
+  # print("Expected conditional volatility (rows=day in event window, cols=event)")
+  # print(expectedConditionalVolatility)
   expectedConditionalVolatility <<- expectedConditionalVolatility
   
-  print("Abnormal returns (rows=day in event window, cols=event):")
-  print(abnormalReturns)
+  # print("Abnormal returns (rows=day in event window, cols=event):")
+  # print(abnormalReturns)
   abnormalReturns <<- as.data.frame(abnormalReturns)
   
-  print("Average abnormal returns:")
-  print(averageAbnormalReturns)
+  # print("Average abnormal returns:")
+  # print(averageAbnormalReturns)
   averageAbnormalReturns <<- as.data.frame(averageAbnormalReturns)
   
   #####
@@ -258,8 +274,14 @@ analyzeEvents = function(returnsFile, eventsFile, termY, termX) {
   print(theta1)
   
   #Compute p-value assuming normal distribution for Cumulative Abnormal Return (CAR)
-  pvalCAR = pnorm(theta1, lower.tail = FALSE)
-  print("P-Value of theta1 with Normal Distribution")
+  if (theta1 < 0) {
+    pvalCAR = pnorm(theta1)
+  }
+  else {
+    pvalCAR = pnorm(theta1, lower.tail = FALSE)
+  }
+  pvalCAR = pvalCAR * 2
+  print("P Value of theta1 ~N(0,1)")
   print(pvalCAR)
   pvalCAR <<- as.data.frame(pvalCAR)
   
@@ -298,7 +320,7 @@ analyzeEvents = function(returnsFile, eventsFile, termY, termX) {
   #Compute p-value assuming chi squared distribution for Cumulative Abnormal Volatility
   #Following Mnasri & Nechi 2016, p190, eq (9)
   pvalCAV = pchisq(phi,((N-1)*EVENT_WINDOW_LENGTH), lower.tail = FALSE)
-  print("P value of phi with Chi Sq with (N-1)*(Event window lenght) degrees of freedom")
+  print("P Value of phi ~ Chi Sq with (N-1)*(Event window lenght) degrees of freedom")
   print(pvalCAV)
   pvalCAV <<- as.data.frame(pvalCAV)
 }
@@ -314,23 +336,27 @@ ExportResults = function(DataToExport, AssignedTermY, AssignedTermX, BaseEventsF
   
   #Add a new column with the description of the specific model
   type=as.data.frame(paste(AssignedTermY,"~",AssignedTermX,"_",BaseEventsFileName,"_",
-                           "(",EVENT_WINDOW_OFFSET,",", EVENT_WINDOW_OFFSET + EVENT_WINDOW_LENGTH,")"))
+                           "(",EVENT_WINDOW_OFFSET,",", EVENT_WINDOW_OFFSET + EVENT_WINDOW_LENGTH,")", sep = ""))
   colnames(type) <- "type"
   
   #Bind data to export with description in one data frame
-  ResultsToExport = bind_cols(DataToExport, type)
+  ResultsToExport <<- bind_cols(DataToExport, type)
   
   #Export .txt with the information
   write.table(ResultsToExport,
               file = paste(AssignedTermY,"~",AssignedTermX,"_",BaseEventsFileName,"_",
                            "(",EVENT_WINDOW_OFFSET,",", EVENT_WINDOW_OFFSET + EVENT_WINDOW_LENGTH,").txt", sep=""),
               quote = FALSE, sep = "\t", dec = ".", row.names = FALSE, col.names = TRUE)
+
+  # write.csv(ResultsToExport,
+  #                 file = paste(AssignedTermY,"-",AssignedTermX,"_",BaseEventsFileName,"_",
+  #                              "(",EVENT_WINDOW_OFFSET,"-", EVENT_WINDOW_OFFSET + EVENT_WINDOW_LENGTH,").txt", sep=""),
+  #                 row.names = FALSE)
   
   #Print notification of succes
   print(paste("Archive named ", AssignedTermY, "~", AssignedTermX, "_", BaseEventsFileName, "_",
               "(", EVENT_WINDOW_OFFSET, ",", EVENT_WINDOW_OFFSET + EVENT_WINDOW_LENGTH, 
               ").txt has been created in the directory ", ExportingDirectory, sep=""))
-  return (ResultsToExport <<- ResultsToExport)
 }
 
 #####
@@ -345,16 +371,36 @@ PrintDirectory = "C:/Users/Earendil/Google Drive/01_MSc_Finance/001_Thesis_propo
 ## **CHANGE THE FOLLOWING TO EVALUATE DIFFERENT EVENTS AND MARKET MODELS**
 
 #Change this to evaluate different type of events
-BaseEventsFileName = "peace"
+#Possible BaseEventsFileNames:  peace, bogota, money, oil,
+#electricity, bigcities, international, ecopetrol, isa
+BaseEventsFileName = "elec2"
 
 eventsFileName = paste(BaseEventsFileName, ".xlsx", sep = "")
 eventsFile = paste(DataDirectory, eventsFileName, sep = "")
 
 #Change these two variables to evaluate different market models
-AssignedTermY="COLCAP"
-AssignedTermX="IBOV"
+#Possible TermY's: colcap, ecopetl, gruposur,
+#isa, celsia, grupoarg, etb  
+#Posible TermX's: spx, ibov, colcap 
+AssignedTermY="celsia"
+AssignedTermX="colcap"
 
 #####
+#Print the specific model and window event
 cat("\014") #Clean console
+print("Specific model and window event")
+print(paste(AssignedTermY, "~", AssignedTermX, "_", BaseEventsFileName, "_",
+"(", EVENT_WINDOW_OFFSET, ",", EVENT_WINDOW_OFFSET + EVENT_WINDOW_LENGTH, 
+")", sep=""))
+
 #Run the functions to analyze the events
 analyzeEvents(returnsFile, eventsFile, AssignedTermY, AssignedTermX)
+
+#Export results - ALWAYS keep commented unless printing needed
+
+#Combine relevant results to be exported in one dataframe
+ResultsToExport=bind_cols(cumulativeAbnormalReturn, pvalCAR, cumulativeAbnormalVolatility, pvalCAV)
+
+#Export results in .txt
+ExportResults(ResultsToExport, AssignedTermY, AssignedTermX, BaseEventsFileName,
+              EVENT_WINDOW_OFFSET, EVENT_WINDOW_LENGTH, PrintDirectory)
